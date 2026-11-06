@@ -118,8 +118,7 @@ Build on x86_64 Linux. The glibc version of the build host sets the minimum
 glibc version of the package.
 
 ```sh
-sudo apt-get install autoconf bison build-essential curl patchelf \
-  pkg-config rustc cargo xz-utils
+sudo apt-get install build-essential curl patchelf pkg-config rustc xz-utils
 
 scripts/build-portable-ruby x86_64-v3 4.0.9
 ls dist/

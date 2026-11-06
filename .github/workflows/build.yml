@@ -26,13 +26,21 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # The runner image already has gcc, make, curl, xz, pkg-config, and Rust
+      # (rustc is needed for YJIT). Install only what is missing.
       - name: Install build tools
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes \
-            autoconf bison build-essential ca-certificates curl g++ git \
-            libdb-dev libgdbm-dev libncurses-dev libreadline-dev \
-            patchelf pkg-config rustc cargo xz-utils
+          missing=()
+          for tool in patchelf; do
+            command -v "$tool" >/dev/null || missing+=("$tool")
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            sudo apt-get update -o Acquire::Retries=3
+            sudo apt-get install --yes --no-install-recommends "${missing[@]}"
+          fi
+          gcc --version | head -1
+          rustc --version
+          patchelf --version
 
       - name: Build package
         run: scripts/build-portable-ruby '${{ matrix.tier }}' '${{ matrix.ruby }}'
