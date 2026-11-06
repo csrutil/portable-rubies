@@ -66,6 +66,8 @@ fetch() {
     rm -f "$file"
     curl --fail --location --retry 3 --connect-timeout 20 --silent --show-error \
       --output "$file" "$candidate" || echo "download failed: $candidate" >&2
+    printf '%s  %s\n' "$sha" "$file" | sha256sum --check --status 2>/dev/null ||
+      echo "checksum mismatch: $candidate" >&2
   done
   printf '%s  %s\n' "$sha" "$file" | sha256sum --check --status || {
     echo "cannot download ${url##*/} with sha256 $sha" >&2
@@ -101,7 +103,8 @@ export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
 build_dependencies() {
   local archive source
 
-  archive=$(fetch 'https://zlib.net/fossils/zlib-1.3.1.tar.gz' '9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23')
+  archive=$(fetch 'https://zlib.net/fossils/zlib-1.3.1.tar.gz' '9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23' \
+    'https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz')
   source=$(unpack "$archive" zlib-1.3.1)
   (cd "$source" && ./configure --prefix="$PREFIX" && run_make && make install)
 
