@@ -1,0 +1,404 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Make set -e apply inside $(...), so a failed download stops the build.
+shopt -s inherit_errexit
+
+TIER=${1:-}
+RUBY_VERSION=${2:-${RUBY_VERSION:-}}
+JOBS=${JOBS:-$(nproc)}
+
+# Stable Ruby releases only. Checksums come from
+# https://cache.ruby-lang.org/pub/ruby/index.txt.
+case "$RUBY_VERSION" in
+  4.0.9) RUBY_SHA256=c35350682ff050b79702d57ade4516e7336063f510155d19fb2fb5b3f3909511 ;;
+  3.4.12) RUBY_SHA256=5e5d85ad93b0adcccbad47733680f4892bd0078e3342437f7babce01c1872479 ;;
+  *)
+    echo "usage: $0 {generic|x86_64-v3|x86_64-v4} {4.0.9|3.4.12}" >&2
+    exit 2
+    ;;
+esac
+RUBY_SERIES=${RUBY_VERSION%.*}
+RUBY_API_VERSION=$RUBY_SERIES.0
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+ROOT=${ROOT%/}
+WORK_ROOT=${WORK_ROOT:-$ROOT/build/portable-ruby/$RUBY_VERSION-$TIER}
+DIST_DIR=${DIST_DIR:-$ROOT/dist}
+
+case "$TIER" in
+  generic)
+    ISA_FLAGS='-march=x86-64 -mtune=generic'
+    RUST_CPU=x86-64
+    ;;
+  x86_64-v3)
+    ISA_FLAGS='-march=x86-64-v3 -mtune=generic'
+    RUST_CPU=x86-64-v3
+    ;;
+  x86_64-v4)
+    ISA_FLAGS='-march=x86-64-v4 -mtune=generic'
+    RUST_CPU=x86-64-v4
+    ;;
+  *)
+    echo "usage: $0 {generic|x86_64-v3|x86_64-v4} {4.0.9|3.4.12}" >&2
+    exit 2
+    ;;
+esac
+
+PACKAGE_NAME="ruby-$RUBY_VERSION-linux-$TIER"
+PREFIX="$WORK_ROOT/$PACKAGE_NAME"
+SOURCES="$WORK_ROOT/sources"
+BUILD="$WORK_ROOT/build"
+DOWNLOADS=${DOWNLOADS:-$ROOT/build/downloads}
+SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git -C "$ROOT" log -1 --format=%ct 2>/dev/null || date +%s)}
+
+mkdir -p "$DOWNLOADS" "$SOURCES" "$BUILD" "$DIST_DIR"
+rm -rf "$PREFIX"
+mkdir -p "$PREFIX"
+
+# fetch URL SHA256 [MIRROR_URL...]: download to $DOWNLOADS and verify.
+fetch() {
+  local url=$1 sha=$2 file candidate
+  shift 2
+  file="$DOWNLOADS/${url##*/}"
+  for candidate in "$url" "$@"; do
+    if printf '%s  %s\n' "$sha" "$file" | sha256sum --check --status 2>/dev/null; then
+      break
+    fi
+    rm -f "$file"
+    curl --fail --location --retry 3 --connect-timeout 20 --silent --show-error \
+      --output "$file" "$candidate" || echo "download failed: $candidate" >&2
+  done
+  printf '%s  %s\n' "$sha" "$file" | sha256sum --check --status || {
+    echo "cannot download ${url##*/} with sha256 $sha" >&2
+    return 1
+  }
+  printf '%s\n' "$file"
+}
+
+unpack() {
+  local archive=$1 name=$2 destination
+  destination="$SOURCES/$name"
+  rm -rf "$destination"
+  mkdir -p "$destination"
+  tar -xf "$archive" --strip-components=1 -C "$destination"
+  printf '%s\n' "$destination"
+}
+
+is_elf() {
+  [[ $(od -An -tx1 -N4 "$1" 2>/dev/null | tr -d ' \n') == 7f454c46 ]]
+}
+
+run_make() {
+  make -j"$JOBS" "$@"
+}
+
+export CFLAGS="-O3 -fPIC $ISA_FLAGS -ffile-prefix-map=$WORK_ROOT=/usr/src/portable-ruby"
+export CXXFLAGS="$CFLAGS"
+export RUSTFLAGS="-C target-cpu=$RUST_CPU -C debuginfo=0"
+export CPPFLAGS="-I$PREFIX/include"
+export LDFLAGS="-L$PREFIX/lib"
+export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
+
+build_dependencies() {
+  local archive source
+
+  archive=$(fetch 'https://zlib.net/fossils/zlib-1.3.1.tar.gz' '9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23')
+  source=$(unpack "$archive" zlib-1.3.1)
+  (cd "$source" && ./configure --prefix="$PREFIX" && run_make && make install)
+
+  archive=$(fetch 'https://github.com/yaml/libyaml/releases/download/0.2.5/yaml-0.2.5.tar.gz' 'c642ae9b75fee120b2d96c712538bd2cf283228d2337df2cf2988e3c02678ef4')
+  source=$(unpack "$archive" yaml-0.2.5)
+  (cd "$source" && ./configure --prefix="$PREFIX" --libdir="$PREFIX/lib" --disable-static --disable-dependency-tracking && run_make && make install)
+
+  archive=$(fetch 'https://github.com/libffi/libffi/releases/download/v3.4.8/libffi-3.4.8.tar.gz' 'bc9842a18898bfacb0ed1252c4febcc7e78fa139fd27fdc7a3e30d9d9356119b')
+  source=$(unpack "$archive" libffi-3.4.8)
+  (cd "$source" && ./configure --prefix="$PREFIX" --libdir="$PREFIX/lib" --disable-static --disable-dependency-tracking && run_make && make install)
+
+  archive=$(fetch 'https://ftpmirror.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz' 'a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898' \
+    'https://mirrors.kernel.org/gnu/gmp/gmp-6.3.0.tar.xz' \
+    'https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz' \
+    'https://gmplib.org/download/gmp/gmp-6.3.0.tar.xz')
+  source=$(unpack "$archive" gmp-6.3.0)
+  # GMP detects the build CPU and selects assembly for it, and runs test
+  # programs. A generic host triplet that differs from --build makes GMP use
+  # only the -march flags and skip the test runs, which crash for v4 on hosts
+  # without AVX-512.
+  (cd "$source" && ./configure --prefix="$PREFIX" --libdir="$PREFIX/lib" \
+    --build="$(gcc -dumpmachine)" --host=x86_64-pc-linux-gnu \
+    --enable-shared --disable-static --disable-dependency-tracking && run_make && make install)
+
+  archive=$(fetch 'https://github.com/jemalloc/jemalloc/releases/download/5.3.0/jemalloc-5.3.0.tar.bz2' '2db82d1e7119df3e71b7640219b6dfe84789bc0537983c3b7ac4f7189aecfeaa')
+  source=$(unpack "$archive" jemalloc-5.3.0)
+  (cd "$source" && ./configure --prefix="$PREFIX" --libdir="$PREFIX/lib" --enable-shared --disable-static --disable-doc --disable-dependency-tracking && run_make && make install_lib_shared install_include)
+
+  archive=$(fetch 'https://github.com/besser82/libxcrypt/releases/download/v4.4.38/libxcrypt-4.4.38.tar.xz' '80304b9c306ea799327f01d9a7549bdb28317789182631f1b54f4511b4206dd6')
+  source=$(unpack "$archive" libxcrypt-4.4.38)
+  (cd "$source" && ./configure --prefix="$PREFIX" --libdir="$PREFIX/lib" --enable-shared --disable-static --disable-dependency-tracking && run_make && make install)
+
+  archive=$(fetch 'https://github.com/openssl/openssl/releases/download/openssl-3.0.22/openssl-3.0.22.tar.gz' '67ebca7e50d17383028045486653492195b83db95f8558709701bb47b5c1ef81')
+  source=$(unpack "$archive" openssl-3.0.22)
+  (cd "$source" && ./Configure linux-x86_64 shared zlib-dynamic no-tests --prefix="$PREFIX" --libdir=lib --openssldir=/etc/ssl && run_make && make install_sw)
+}
+
+ruby_configure() {
+  local source=$1 prefix=$2
+  shift 2
+  (
+    cd "$source"
+    ./configure \
+      --prefix="$prefix" \
+      --enable-shared \
+      --enable-load-relative \
+      --with-jemalloc \
+      --with-out-ext=win32,win32ole,-test- \
+      --disable-install-doc \
+      --disable-install-rdoc \
+      --disable-dependency-tracking \
+      --enable-yjit \
+      --with-opt-dir="$prefix" \
+      --with-openssl-dir="$prefix" \
+      --with-libyaml-dir="$prefix" \
+      --with-libffi-dir="$prefix" \
+      --with-gmp-dir="$prefix" \
+      "$@"
+  )
+}
+
+ruby_source() {
+  local name=$1 archive
+  archive=$(fetch "https://cache.ruby-lang.org/pub/ruby/$RUBY_SERIES/ruby-$RUBY_VERSION.tar.gz" "$RUBY_SHA256")
+  unpack "$archive" "$name"
+}
+
+ruby_configure_bootstrap() {
+  local source=$1 prefix=$2
+  (
+    cd "$source"
+    ./configure \
+      --prefix="$prefix" \
+      --enable-shared \
+      --enable-load-relative \
+      --with-out-ext=win32,win32ole,-test- \
+      --disable-install-doc \
+      --disable-install-rdoc \
+      --disable-dependency-tracking \
+      --enable-yjit
+  )
+}
+
+build_native_ruby() {
+  local source
+  source=$(ruby_source ruby-$RUBY_VERSION)
+  ruby_configure "$source" "$PREFIX"
+  (cd "$source" && run_make && make install)
+}
+
+build_v4_ruby() {
+  local bootstrap_source bootstrap_prefix="$BUILD/bootstrap-prefix" target_source wrapper override
+
+  # The build host may lack AVX-512, so it cannot run v4 code. Build a generic
+  # Ruby from the same source. Its full install is BASERUBY (host tools that
+  # need C extensions such as monitor); its miniruby, pointed at the target
+  # tree, is MINIRUBY. No v4 code runs on the build host.
+  bootstrap_source=$(ruby_source ruby-$RUBY_VERSION-bootstrap)
+  (
+    export CFLAGS='-O2 -fPIC -march=x86-64 -mtune=generic'
+    export CXXFLAGS="$CFLAGS"
+    export RUSTFLAGS='-C target-cpu=x86-64 -C debuginfo=0'
+    export CPPFLAGS=''
+    export LDFLAGS=''
+    export PKG_CONFIG_PATH=''
+    rm -rf "$bootstrap_prefix"
+    ruby_configure_bootstrap "$bootstrap_source" "$bootstrap_prefix"
+    cd "$bootstrap_source"
+    run_make
+    make install
+  )
+
+  build_dependencies
+
+  target_source=$(ruby_source ruby-$RUBY_VERSION-v4)
+  wrapper="$BUILD/miniruby-generic"
+  # Target paths come first. The bootstrap tree supplies rbconfig.rb only until
+  # the target tree generates its own.
+  cat > "$wrapper" <<EOF
+#!/bin/sh
+exec "$bootstrap_source/miniruby" -I"$target_source/lib" -I"$target_source" -I"$bootstrap_source" --disable=gems "\$@"
+EOF
+  chmod +x "$wrapper"
+
+  ruby_configure "$target_source" "$PREFIX" --with-baseruby="$bootstrap_prefix/bin/ruby"
+  # RUNRUBY normally runs tool/runruby.rb, which executes the target ./ruby.
+  # Use the generic bootstrap Ruby with the target lib and rbconfig instead,
+  # as Ruby does for cross builds (rbinstall.rb loads ./x86_64-linux-fake.rb).
+  override=(
+    MINIRUBY="$wrapper" BASERUBY="$bootstrap_prefix/bin/ruby" ruby="$wrapper" RUBY="$wrapper"
+    RUNRUBY="$bootstrap_prefix/bin/ruby --disable-gems -I$target_source/lib -I$target_source"
+  )
+  (
+    cd "$target_source"
+    run_make "${override[@]}"
+    # Overriding ruby= stops the default target from linking ./ruby.
+    run_make prog "${override[@]}"
+    make install "${override[@]}"
+  )
+}
+
+bundle_compiler_runtime() {
+  local library target
+  for library in "$(gcc -print-file-name=libgcc_s.so.1)" "$(g++ -print-file-name=libstdc++.so.6)"; do
+    [[ -f "$library" ]] || continue
+    target=$(readlink -f "$library")
+    cp -L "$target" "$PREFIX/lib/${target##*/}"
+    ln -sfn "${target##*/}" "$PREFIX/lib/${library##*/}"
+  done
+}
+
+patch_rpaths() {
+  local file type directory relative rpath
+  while IFS= read -r -d '' file; do
+    is_elf "$file" || continue
+    type=$(readelf -h "$file" 2>/dev/null | awk '/Type:/{print $2}')
+    [[ "$type" == DYN || "$type" == EXEC ]] || continue
+    directory=$(dirname "$file")
+    relative=$(realpath --relative-to="$directory" "$PREFIX/lib")
+    if [[ "$relative" == . ]]; then
+      rpath='$ORIGIN'
+    else
+      rpath="\$ORIGIN/$relative"
+    fi
+    patchelf --set-rpath "$rpath" "$file"
+  done < <(find "$PREFIX" -type f -print0)
+}
+
+make_portable_launchers() {
+  local file first tmp
+  mv "$PREFIX/bin/ruby" "$PREFIX/bin/ruby.bin"
+
+  # Use a bundled OpenSSL config. Distro configs may be missing, or may load
+  # policies and providers that the bundled OpenSSL does not have.
+  mkdir -p "$PREFIX/ssl"
+  cat > "$PREFIX/ssl/openssl.cnf" <<'EOF'
+openssl_conf = openssl_init
+
+[openssl_init]
+providers = provider_sect
+
+[provider_sect]
+default = default_sect
+
+[default_sect]
+activate = 1
+EOF
+
+  cat > "$PREFIX/bin/ruby" <<'EOF'
+#!/bin/sh
+bindir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+root=${bindir%/bin}
+
+# Find the system CA store. Values set by the user take precedence.
+if [ -z "${SSL_CERT_FILE:-}" ]; then
+  for f in \
+    /etc/ssl/certs/ca-certificates.crt \
+    /etc/pki/tls/certs/ca-bundle.crt \
+    /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem \
+    /etc/ssl/ca-bundle.pem \
+    /etc/ssl/cert.pem; do
+    if [ -r "$f" ]; then export SSL_CERT_FILE="$f"; break; fi
+  done
+fi
+if [ -z "${SSL_CERT_DIR:-}" ]; then
+  for d in /etc/ssl/certs /etc/pki/tls/certs; do
+    if [ -d "$d" ]; then export SSL_CERT_DIR="$d"; break; fi
+  done
+fi
+
+export OPENSSL_CONF="${OPENSSL_CONF:-$root/ssl/openssl.cnf}"
+export OPENSSL_MODULES="${OPENSSL_MODULES:-$root/lib/ossl-modules}"
+exec "$bindir/ruby.bin" "$@"
+EOF
+  chmod +x "$PREFIX/bin/ruby"
+
+  while IFS= read -r -d '' file; do
+    [[ "$file" == "$PREFIX/bin/ruby" || "$file" == "$PREFIX/bin/ruby.bin" ]] && continue
+    first=$(head -n 1 "$file" 2>/dev/null || true)
+    [[ "$first" == '#!'*ruby* ]] || continue
+    tmp="$file.portable"
+    {
+      cat <<'EOF'
+#!/bin/sh
+bindir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec "$bindir/ruby" -x "$0" "$@"
+#!ruby
+EOF
+      tail -n +2 "$file"
+    } > "$tmp"
+    chmod --reference="$file" "$tmp"
+    mv "$tmp" "$file"
+  done < <(find "$PREFIX/bin" -maxdepth 1 -type f -perm /111 -print0)
+}
+
+verify_elf() {
+  local file entry needed
+  local -A bundled=()
+  while IFS= read -r -d '' file; do
+    bundled["$(basename "$file")"]=1
+  done < <(find "$PREFIX/lib" \( -type f -o -type l \) -print0)
+
+  while IFS= read -r -d '' file; do
+    is_elf "$file" || continue
+    entry=$(readelf -d "$file" 2>/dev/null || true)
+    [[ "$entry" != *RPATH* && "$entry" != *RUNPATH* ]] || {
+      grep -Eq 'Library (rpath|runpath): \[\$ORIGIN(/|\])' <<<"$entry" || {
+        echo "non-relative RPATH in $file" >&2
+        exit 1
+      }
+    }
+    while read -r needed; do
+      case "$needed" in
+        libc.so.*|libm.so.*|libpthread.so.*|libdl.so.*|librt.so.*|ld-linux-x86-64.so.*|linux-vdso.so.*) ;;
+        *)
+          [[ ${bundled[$needed]+yes} ]] || {
+            echo "unbundled dependency $needed required by $file" >&2
+            exit 1
+          }
+          ;;
+      esac
+    done < <(sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p' <<<"$entry")
+  done < <(find "$PREFIX" -type f -print0)
+}
+
+runtime_test() {
+  local temporary="$WORK_ROOT/relocation-test"
+  rm -rf "$temporary"
+  mkdir -p "$temporary"
+  cp -a "$PREFIX" "$temporary/ruby"
+  "$temporary/ruby/bin/ruby" --yjit -ropenssl -rpsych -rzlib -rfiddle -e \
+    'abort "YJIT disabled" unless RubyVM::YJIT.enabled?; puts [RUBY_VERSION, OpenSSL::OPENSSL_VERSION, Psych::VERSION, Zlib::VERSION].join(" | ")'
+  # Verify a real TLS handshake against the system CA store.
+  env -u SSL_CERT_FILE -u SSL_CERT_DIR -u OPENSSL_CONF "$temporary/ruby/bin/ruby" -rnet/http -e \
+    'Net::HTTP.start("rubygems.org", 443, use_ssl: true, verify_mode: OpenSSL::SSL::VERIFY_PEER) { |h| puts "TLS #{h.head("/").code}" }'
+  "$temporary/ruby/bin/gem" --version
+  rm -rf "$temporary"
+}
+
+if [[ "$TIER" == x86_64-v4 ]]; then
+  build_v4_ruby
+else
+  build_dependencies
+  build_native_ruby
+fi
+
+bundle_compiler_runtime
+make_portable_launchers
+patch_rpaths
+verify_elf
+if [[ "$TIER" != x86_64-v4 ]]; then
+  runtime_test
+fi
+
+archive="$DIST_DIR/$PACKAGE_NAME.tar.gz"
+rm -f "$archive"
+tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$SOURCE_DATE_EPOCH" \
+  -C "$WORK_ROOT" -czf "$archive" "$PACKAGE_NAME"
+sha256sum "$archive" > "$archive.sha256"
+printf '%s\n' "$archive"

@@ -1,0 +1,98 @@
+name: Build and release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Ruby ${{ matrix.ruby }} (${{ matrix.tier }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby:
+          - 4.0.9
+          - 3.4.12
+        tier:
+          - generic
+          - x86_64-v3
+          - x86_64-v4
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            autoconf bison build-essential ca-certificates curl g++ git \
+            libdb-dev libgdbm-dev libncurses-dev libreadline-dev \
+            patchelf pkg-config rustc cargo xz-utils
+
+      - name: Build package
+        run: scripts/build-portable-ruby '${{ matrix.tier }}' '${{ matrix.ruby }}'
+
+      - name: Upload package as artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ruby-${{ matrix.ruby }}-linux-${{ matrix.tier }}
+          path: |
+            dist/ruby-${{ matrix.ruby }}-linux-${{ matrix.tier }}.tar.gz
+            dist/ruby-${{ matrix.ruby }}-linux-${{ matrix.tier }}.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    name: Release Ruby ${{ matrix.ruby }}
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby:
+          - 4.0.9
+          - 3.4.12
+
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ruby-${{ matrix.ruby }}-linux-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUBY_VERSION: ${{ matrix.ruby }}
+        run: |
+          cd dist
+          {
+            echo "Portable, relocatable Ruby ${RUBY_VERSION} for x86_64 Linux (glibc 2.39 or newer)."
+            echo
+            echo "| Tier | Package | SHA256 |"
+            echo "|---|---|---|"
+            for tier in generic x86_64-v3 x86_64-v4; do
+              file="ruby-${RUBY_VERSION}-linux-${tier}.tar.gz"
+              echo "| \`${tier}\` | \`${file}\` | \`$(cut -d ' ' -f 1 "${file}.sha256")\` |"
+            done
+            echo
+            echo "See the [README](https://github.com/${GITHUB_REPOSITORY}#readme) to choose a tier and install."
+            echo
+            echo "Built from ${GITHUB_SHA} by run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}."
+          } > notes.md
+
+          if gh release view "$RUBY_VERSION" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$RUBY_VERSION" -R "$GITHUB_REPOSITORY" --notes-file notes.md
+            gh release upload "$RUBY_VERSION" -R "$GITHUB_REPOSITORY" --clobber ./*.tar.gz ./*.sha256
+          else
+            gh release create "$RUBY_VERSION" -R "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --title "Ruby $RUBY_VERSION" \
+              --notes-file notes.md ./*.tar.gz ./*.sha256
+          fi
