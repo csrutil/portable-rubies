@@ -86,6 +86,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RUBY_VERSION: ${{ matrix.ruby }}
+          ALL_RUBY_VERSIONS: 4.0.9 3.4.12
         run: |
           cd dist
           ls -la
@@ -109,11 +110,15 @@ jobs:
             echo "Built from ${GITHUB_SHA} by run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}."
           } > notes.md
 
+          # Only the highest Ruby version is marked as the latest release.
+          latest=$(printf '%s\n' $ALL_RUBY_VERSIONS | sort -V | tail -1)
+          if [ "$RUBY_VERSION" = "$latest" ]; then latest_flag=--latest=true; else latest_flag=--latest=false; fi
+
           if gh release view "$RUBY_VERSION" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release edit "$RUBY_VERSION" -R "$GITHUB_REPOSITORY" --notes-file notes.md
+            gh release edit "$RUBY_VERSION" -R "$GITHUB_REPOSITORY" --notes-file notes.md "$latest_flag"
             gh release upload "$RUBY_VERSION" -R "$GITHUB_REPOSITORY" --clobber ./*.tar.gz ./*.sha256
           else
             gh release create "$RUBY_VERSION" -R "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" --title "Ruby $RUBY_VERSION" \
+              --target "$GITHUB_SHA" --title "Ruby $RUBY_VERSION" "$latest_flag" \
               --notes-file notes.md ./*.tar.gz ./*.sha256
           fi

@@ -148,8 +148,9 @@ To add a Ruby version:
 1. Add the version and the SHA256 of its `.tar.gz` (from
    <https://cache.ruby-lang.org/pub/ruby/index.txt>) to the `case` block at
    the top of `scripts/build-portable-ruby`.
-2. Add the version to both `ruby` matrices in
-   `.github/workflows/build.yml`.
+2. Add the version to both `ruby` matrices and to `ALL_RUBY_VERSIONS` in
+   `.github/workflows/build.yml`. The highest version is marked as the
+   latest release.
 
 ## License
 
