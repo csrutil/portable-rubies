@@ -406,5 +406,6 @@ archive="$DIST_DIR/$PACKAGE_NAME.tar.gz"
 rm -f "$archive"
 tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$SOURCE_DATE_EPOCH" \
   -C "$WORK_ROOT" -czf "$archive" "$PACKAGE_NAME"
-sha256sum "$archive" > "$archive.sha256"
+# Record only the file name, so "sha256sum -c" works next to the download.
+(cd "$DIST_DIR" && sha256sum "$PACKAGE_NAME.tar.gz" > "$PACKAGE_NAME.tar.gz.sha256")
 printf '%s\n' "$archive"
