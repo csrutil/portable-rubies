@@ -231,7 +231,10 @@ EOF
   # Use the generic bootstrap Ruby with the target lib and rbconfig instead,
   # as Ruby does for cross builds (rbinstall.rb loads ./x86_64-linux-fake.rb).
   override=(
-    MINIRUBY="$wrapper" BASERUBY="$bootstrap_prefix/bin/ruby" ruby="$wrapper" RUBY="$wrapper"
+    # --disable=gems matters: rubygems would load the bootstrap rbconfig.rb
+    # before x86_64-linux-fake.rb loads the target one, and generated
+    # makefiles such as enc.mk would miss the target CPPFLAGS.
+    MINIRUBY="$wrapper" BASERUBY="$bootstrap_prefix/bin/ruby --disable=gems" ruby="$wrapper" RUBY="$wrapper"
     RUNRUBY="$bootstrap_prefix/bin/ruby --disable-gems -I$target_source/lib -I$target_source"
   )
   (
