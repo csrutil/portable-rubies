@@ -45,13 +45,20 @@ jobs:
       - name: Build package
         run: scripts/build-portable-ruby '${{ matrix.tier }}' '${{ matrix.ruby }}'
 
-      - name: Upload package as artifact
+      # archive: false uploads the file as-is instead of wrapping it in a zip.
+      # It takes one file per step; the file name is the artifact name.
+      - name: Upload package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ruby-${{ matrix.ruby }}-linux-${{ matrix.tier }}
-          path: |
-            dist/ruby-${{ matrix.ruby }}-linux-${{ matrix.tier }}.tar.gz
-            dist/ruby-${{ matrix.ruby }}-linux-${{ matrix.tier }}.tar.gz.sha256
+          path: dist/ruby-${{ matrix.ruby }}-linux-${{ matrix.tier }}.tar.gz
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload checksum
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: dist/ruby-${{ matrix.ruby }}-linux-${{ matrix.tier }}.tar.gz.sha256
+          archive: false
           if-no-files-found: error
 
   release:
@@ -81,6 +88,12 @@ jobs:
           RUBY_VERSION: ${{ matrix.ruby }}
         run: |
           cd dist
+          ls -la
+          for tier in generic x86_64-v3 x86_64-v4; do
+            test -f "ruby-${RUBY_VERSION}-linux-${tier}.tar.gz"
+            test -f "ruby-${RUBY_VERSION}-linux-${tier}.tar.gz.sha256"
+          done
+          sha256sum -c ./*.sha256
           {
             echo "Portable, relocatable Ruby ${RUBY_VERSION} for x86_64 Linux (glibc 2.39 or newer)."
             echo
