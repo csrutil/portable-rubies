@@ -9,10 +9,9 @@ bundled libraries for that microarchitecture level.
 
 ## Packages
 
-| Ruby | Tiers |
-|---|---|
-| 4.0.9 | `generic`, `x86_64-v3`, `x86_64-v4` |
-| 3.4.12 | `generic`, `x86_64-v3`, `x86_64-v4` |
+CI builds the latest two stable releases listed by
+[ruby/ruby](https://github.com/ruby/ruby/releases). Each release includes the
+`generic`, `x86_64-v3`, and `x86_64-v4` tiers.
 
 Download packages from [Releases](../../releases). Each release tag is the
 Ruby version, for example `4.0.9`. Every tarball has a `.sha256` file.
@@ -144,18 +143,13 @@ reason, CI only checks v4 packages statically and does not run them.
 
 ## Releases
 
-The **Build and release** workflow runs when you start it from the Actions
-tab. It builds all six packages on Ubuntu 24.04. When all builds pass, it
-creates or updates one release per Ruby version, tagged with that version.
-
-To add a Ruby version:
-
-1. Add the version and the SHA256 of its `.tar.gz` (from
-   <https://cache.ruby-lang.org/pub/ruby/index.txt>) to the `case` block at
-   the top of `scripts/build-portable-ruby`.
-2. Add the version to both `ruby` matrices and to `ALL_RUBY_VERSIONS` in
-   `.github/workflows/build.yml`. The highest version is marked as the
-   latest release.
+The **Build and release** workflow runs after each push to `main`, every day
+at 02:17 UTC, or when you start it from the Actions tab. It reads the latest
+two stable versions from the
+[ruby/ruby releases](https://github.com/ruby/ruby/releases). CI reuses package
+archives that already exist in this repository's releases and builds only the
+missing CPU tiers. The build script gets each source URL and SHA256 from Ruby's
+official release index.
 
 ## License
 

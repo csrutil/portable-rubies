@@ -7,22 +7,10 @@ TIER=${1:-}
 RUBY_VERSION=${2:-${RUBY_VERSION:-}}
 JOBS=${JOBS:-$(nproc)}
 
-# Stable Ruby releases only. Checksums come from
-# https://cache.ruby-lang.org/pub/ruby/index.txt.
-case "$RUBY_VERSION" in
-  4.0.9) RUBY_SHA256=c35350682ff050b79702d57ade4516e7336063f510155d19fb2fb5b3f3909511 ;;
-  3.4.12) RUBY_SHA256=5e5d85ad93b0adcccbad47733680f4892bd0078e3342437f7babce01c1872479 ;;
-  *)
-    echo "usage: $0 {generic|x86_64-v3|x86_64-v4} {4.0.9|3.4.12}" >&2
-    exit 2
-    ;;
-esac
-RUBY_SERIES=${RUBY_VERSION%.*}
-RUBY_API_VERSION=$RUBY_SERIES.0
-ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-ROOT=${ROOT%/}
-WORK_ROOT=${WORK_ROOT:-$ROOT/build/portable-ruby/$RUBY_VERSION-$TIER}
-DIST_DIR=${DIST_DIR:-$ROOT/dist}
+usage() {
+  echo "usage: $0 {generic|x86_64-v3|x86_64-v4} RUBY_VERSION" >&2
+  exit 2
+}
 
 case "$TIER" in
   generic)
@@ -37,12 +25,30 @@ case "$TIER" in
     ISA_FLAGS='-march=x86-64-v4 -mtune=generic'
     RUST_CPU=x86-64-v4
     ;;
-  *)
-    echo "usage: $0 {generic|x86_64-v3|x86_64-v4} {4.0.9|3.4.12}" >&2
-    exit 2
-    ;;
+  *) usage ;;
 esac
 
+[[ "$RUBY_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || usage
+
+# Resolve the source URL and checksum from Ruby's release index. Preview,
+# release-candidate, and development versions fail the numeric version check.
+ruby_metadata=$(curl --fail --location --retry 3 --connect-timeout 20 \
+  --silent --show-error https://cache.ruby-lang.org/pub/ruby/index.txt |
+  awk -F '\t' -v name="ruby-$RUBY_VERSION" '$1 == name && $2 ~ /\.tar\.gz$/ { print $2 "\t" $4 }')
+[[ -n "$ruby_metadata" && "$ruby_metadata" != *$'\n'* ]] || {
+  echo "stable Ruby release not found: $RUBY_VERSION" >&2
+  exit 2
+}
+IFS=$'\t' read -r RUBY_URL RUBY_SHA256 <<<"$ruby_metadata"
+[[ "$RUBY_URL" == https://* && "$RUBY_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+  echo "invalid release metadata for Ruby $RUBY_VERSION" >&2
+  exit 2
+}
+
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+ROOT=${ROOT%/}
+WORK_ROOT=${WORK_ROOT:-$ROOT/build/portable-ruby/$RUBY_VERSION-$TIER}
+DIST_DIR=${DIST_DIR:-$ROOT/dist}
 PACKAGE_NAME="ruby-$RUBY_VERSION-linux-$TIER"
 PREFIX="$WORK_ROOT/$PACKAGE_NAME"
 SOURCES="$WORK_ROOT/sources"
@@ -168,7 +174,7 @@ ruby_configure() {
 
 ruby_source() {
   local name=$1 archive
-  archive=$(fetch "https://cache.ruby-lang.org/pub/ruby/$RUBY_SERIES/ruby-$RUBY_VERSION.tar.gz" "$RUBY_SHA256")
+  archive=$(fetch "$RUBY_URL" "$RUBY_SHA256")
   unpack "$archive" "$name"
 }
 

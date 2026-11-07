@@ -2,21 +2,43 @@ name: Build and release
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '17 2 * * *'
 
 permissions:
   contents: read
 
 jobs:
+  discover:
+    name: Find current Ruby releases
+    runs-on: ubuntu-24.04
+    outputs:
+      rubies: ${{ steps.releases.outputs.rubies }}
+      latest: ${{ steps.releases.outputs.latest }}
+    steps:
+      - name: Find the latest two stable releases
+        id: releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rubies=$(gh api repos/ruby/ruby/releases --jq \
+            '[.[] | select(.draft == false and .prerelease == false) | .name | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))][0:2]')
+          test "$(jq length <<<"$rubies")" -eq 2
+          echo "rubies=$(jq -c . <<<"$rubies")" >> "$GITHUB_OUTPUT"
+          echo "latest=$(jq -r '.[0]' <<<"$rubies")" >> "$GITHUB_OUTPUT"
+
   build:
     name: Ruby ${{ matrix.ruby }} (${{ matrix.tier }})
+    needs: discover
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        ruby:
-          - 4.0.9
-          - 3.4.12
+        ruby: ${{ fromJSON(needs.discover.outputs.rubies) }}
         tier:
           - generic
           - x86_64-v3
@@ -26,9 +48,30 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Reuse an existing package
+        id: package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUBY_VERSION: ${{ matrix.ruby }}
+          TIER: ${{ matrix.tier }}
+        run: |
+          archive="ruby-${RUBY_VERSION}-linux-${TIER}.tar.gz"
+          mkdir -p dist
+          if gh release download "$RUBY_VERSION" -R "$GITHUB_REPOSITORY" \
+            --pattern "$archive" --dir dist; then
+            gh release download "$RUBY_VERSION" -R "$GITHUB_REPOSITORY" \
+              --pattern "$archive.sha256" --dir dist 2>/dev/null ||
+              (cd dist && sha256sum "$archive" > "$archive.sha256")
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            rm -rf dist
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
       # The runner image already has gcc, make, curl, xz, pkg-config, and Rust
       # (rustc is needed for YJIT). Install only what is missing.
       - name: Install build tools
+        if: steps.package.outputs.build == 'true'
         run: |
           missing=()
           for tool in patchelf; do
@@ -43,6 +86,7 @@ jobs:
           patchelf --version
 
       - name: Build package
+        if: steps.package.outputs.build == 'true'
         run: scripts/build-portable-ruby '${{ matrix.tier }}' '${{ matrix.ruby }}'
 
       # archive: false uploads the file as-is instead of wrapping it in a zip.
@@ -63,16 +107,14 @@ jobs:
 
   release:
     name: Release Ruby ${{ matrix.ruby }}
-    needs: build
+    needs: [discover, build]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     strategy:
       fail-fast: false
       matrix:
-        ruby:
-          - 4.0.9
-          - 3.4.12
+        ruby: ${{ fromJSON(needs.discover.outputs.rubies) }}
 
     steps:
       - name: Download packages
@@ -86,7 +128,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RUBY_VERSION: ${{ matrix.ruby }}
-          ALL_RUBY_VERSIONS: 4.0.9 3.4.12
+          LATEST_RUBY_VERSION: ${{ needs.discover.outputs.latest }}
         run: |
           cd dist
           ls -la
@@ -110,9 +152,8 @@ jobs:
             echo "Built from ${GITHUB_SHA} by run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}."
           } > notes.md
 
-          # Only the highest Ruby version is marked as the latest release.
-          latest=$(printf '%s\n' $ALL_RUBY_VERSIONS | sort -V | tail -1)
-          if [ "$RUBY_VERSION" = "$latest" ]; then latest_flag=--latest=true; else latest_flag=--latest=false; fi
+          # Only the newest Ruby release is marked as the latest release.
+          if [ "$RUBY_VERSION" = "$LATEST_RUBY_VERSION" ]; then latest_flag=--latest=true; else latest_flag=--latest=false; fi
 
           if gh release view "$RUBY_VERSION" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$RUBY_VERSION" -R "$GITHUB_REPOSITORY" --notes-file notes.md "$latest_flag"
