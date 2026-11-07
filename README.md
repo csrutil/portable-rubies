@@ -76,13 +76,13 @@ Bundled libraries, built from source with the tier's flags:
 
 | Library | Version |
 |---|---|
-| OpenSSL | 3.0.22 |
-| zlib | 1.3.1 |
+| OpenSSL | 4.1.0 |
+| zlib | 1.4 |
 | libyaml | 0.2.5 |
-| libffi | 3.4.8 |
+| libffi | 3.8.0 |
 | GMP | 6.3.0 |
-| jemalloc | 5.3.0 |
-| libxcrypt | 4.4.38 |
+| jemalloc | 5.4.0 |
+| libxcrypt | 4.5.2 |
 
 The packages also include `libgcc_s` and `libstdc++` from the build
 toolchain. Every ELF file has an `$ORIGIN`-relative `RUNPATH`, so it finds

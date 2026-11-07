@@ -103,17 +103,17 @@ export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
 build_dependencies() {
   local archive source
 
-  archive=$(fetch 'https://zlib.net/fossils/zlib-1.3.1.tar.gz' '9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23' \
-    'https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz')
-  source=$(unpack "$archive" zlib-1.3.1)
+  archive=$(fetch 'https://zlib.net/zlib-1.4.tar.gz' '02dd159783677a749c04adbdd02b55b8a2bcc7e054f51b76b549199a916ad584' \
+    'https://github.com/madler/zlib/releases/download/v1.4/zlib-1.4.tar.gz')
+  source=$(unpack "$archive" zlib-1.4)
   (cd "$source" && ./configure --prefix="$PREFIX" && run_make && make install)
 
   archive=$(fetch 'https://github.com/yaml/libyaml/releases/download/0.2.5/yaml-0.2.5.tar.gz' 'c642ae9b75fee120b2d96c712538bd2cf283228d2337df2cf2988e3c02678ef4')
   source=$(unpack "$archive" yaml-0.2.5)
   (cd "$source" && ./configure --prefix="$PREFIX" --libdir="$PREFIX/lib" --disable-static --disable-dependency-tracking && run_make && make install)
 
-  archive=$(fetch 'https://github.com/libffi/libffi/releases/download/v3.4.8/libffi-3.4.8.tar.gz' 'bc9842a18898bfacb0ed1252c4febcc7e78fa139fd27fdc7a3e30d9d9356119b')
-  source=$(unpack "$archive" libffi-3.4.8)
+  archive=$(fetch 'https://github.com/libffi/libffi/releases/download/v3.8.0/libffi-3.8.0.tar.gz' '7da3e2d9a171eb0a038f592ecad3ff2bb2550f3496d87b3b29ad0cf4430c0db4')
+  source=$(unpack "$archive" libffi-3.8.0)
   (cd "$source" && ./configure --prefix="$PREFIX" --libdir="$PREFIX/lib" --disable-static --disable-dependency-tracking && run_make && make install)
 
   archive=$(fetch 'https://ftpmirror.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz' 'a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898' \
@@ -129,16 +129,16 @@ build_dependencies() {
     --build="$(gcc -dumpmachine)" --host=x86_64-pc-linux-gnu \
     --enable-shared --disable-static --disable-dependency-tracking && run_make && make install)
 
-  archive=$(fetch 'https://github.com/jemalloc/jemalloc/releases/download/5.3.0/jemalloc-5.3.0.tar.bz2' '2db82d1e7119df3e71b7640219b6dfe84789bc0537983c3b7ac4f7189aecfeaa')
-  source=$(unpack "$archive" jemalloc-5.3.0)
+  archive=$(fetch 'https://github.com/jemalloc/jemalloc/releases/download/5.4.0/jemalloc-5.4.0.tar.bz2' '200776fac271093e7c2f21edd6d62657ecd2be578d9328633f2a86bfa6ef4f1d')
+  source=$(unpack "$archive" jemalloc-5.4.0)
   (cd "$source" && ./configure --prefix="$PREFIX" --libdir="$PREFIX/lib" --enable-shared --disable-static --disable-doc --disable-dependency-tracking && run_make && make install_lib_shared install_include)
 
-  archive=$(fetch 'https://github.com/besser82/libxcrypt/releases/download/v4.4.38/libxcrypt-4.4.38.tar.xz' '80304b9c306ea799327f01d9a7549bdb28317789182631f1b54f4511b4206dd6')
-  source=$(unpack "$archive" libxcrypt-4.4.38)
+  archive=$(fetch 'https://github.com/besser82/libxcrypt/releases/download/v4.5.2/libxcrypt-4.5.2.tar.xz' '71513a31c01a428bccd5367a32fd95f115d6dac50fb5b60c779d5c7942aec071')
+  source=$(unpack "$archive" libxcrypt-4.5.2)
   (cd "$source" && ./configure --prefix="$PREFIX" --libdir="$PREFIX/lib" --enable-shared --disable-static --disable-dependency-tracking && run_make && make install)
 
-  archive=$(fetch 'https://github.com/openssl/openssl/releases/download/openssl-3.0.22/openssl-3.0.22.tar.gz' '67ebca7e50d17383028045486653492195b83db95f8558709701bb47b5c1ef81')
-  source=$(unpack "$archive" openssl-3.0.22)
+  archive=$(fetch 'https://github.com/openssl/openssl/releases/download/openssl-4.1.0/openssl-4.1.0.tar.gz' '50c17baf54cb008f6ce42d50deb4b28050a1aad711636cabd4b241c7e90cc2fd')
+  source=$(unpack "$archive" openssl-4.1.0)
   (cd "$source" && ./Configure linux-x86_64 shared zlib-dynamic no-tests --prefix="$PREFIX" --libdir=lib --openssldir=/etc/ssl && run_make && make install_sw)
 }
 
