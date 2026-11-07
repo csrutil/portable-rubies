@@ -4,8 +4,9 @@ Prebuilt, relocatable Ruby for x86_64 Linux. Extract a tarball into any
 directory and run it. You do not need root, a compiler, `LD_LIBRARY_PATH`,
 or Ruby's library dependencies on the host.
 
-Each Ruby release comes in three CPU tiers. Each tier compiles Ruby and all
-bundled libraries for that microarchitecture level.
+Each Ruby release comes in three CPU tiers. Each tier compiles Ruby, YJIT,
+and all bundled libraries for that microarchitecture level. C and C++ code
+uses `-O3` and GCC link-time optimization. YJIT uses release-mode ThinLTO.
 
 ## Packages
 
@@ -24,7 +25,7 @@ Ruby version, for example `4.0.9`. Every tarball has a `.sha256` file.
 
 ### Choose a tier
 
-| Tier | Compiler flags | CPUs |
+| Tier | ISA flags | CPUs |
 |---|---|---|
 | `generic` | `-march=x86-64 -mtune=generic` | All x86_64 CPUs |
 | `x86_64-v3` | `-march=x86-64-v3 -mtune=generic` | AVX2 class: Intel Haswell (2013) and newer, AMD Zen and newer |
@@ -70,6 +71,10 @@ Ruby is configured with:
 --with-out-ext=win32,win32ole,-test-
 --disable-install-doc --disable-install-rdoc
 ```
+
+Ruby builds YJIT but does not enable it by default. Enable it for long-running
+workloads with `ruby --yjit`, `RUBY_YJIT_ENABLE=1`, or
+`RubyVM::YJIT.enable` after application startup.
 
 Bundled libraries, built from source with the tier's flags:
 

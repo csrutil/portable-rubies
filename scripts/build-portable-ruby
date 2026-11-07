@@ -99,11 +99,24 @@ run_make() {
   make -j"$JOBS" "$@"
 }
 
-export CFLAGS="-O3 -fPIC $ISA_FLAGS -ffile-prefix-map=$WORK_ROOT=/usr/src/portable-ruby"
+make_rustc_wrapper() {
+  local output=$1 cpu=$2
+  cat > "$output" <<EOF
+#!/bin/sh
+exec rustc "\$@" -C target-cpu=$cpu -C debuginfo=0
+EOF
+  chmod +x "$output"
+}
+
+# Keep native code in fat LTO objects so GCC tools and intermediate static
+# archives still work during the build.
+export CFLAGS="-O3 -flto=auto -ffat-lto-objects -fPIC $ISA_FLAGS -ffile-prefix-map=$WORK_ROOT=/usr/src/portable-ruby"
 export CXXFLAGS="$CFLAGS"
+# Cargo reads RUSTFLAGS. Release tarballs call rustc directly, so the Ruby
+# make commands also use a wrapper that adds these options.
 export RUSTFLAGS="-C target-cpu=$RUST_CPU -C debuginfo=0"
 export CPPFLAGS="-I$PREFIX/include"
-export LDFLAGS="-L$PREFIX/lib"
+export LDFLAGS="-flto=auto -L$PREFIX/lib"
 export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
 
 build_dependencies() {
@@ -195,20 +208,24 @@ ruby_configure_bootstrap() {
 }
 
 build_native_ruby() {
-  local source
+  local source rustc_wrapper="$BUILD/rustc-target"
   source=$(ruby_source ruby-$RUBY_VERSION)
+  make_rustc_wrapper "$rustc_wrapper" "$RUST_CPU"
   ruby_configure "$source" "$PREFIX"
-  (cd "$source" && run_make && make install)
+  (cd "$source" && run_make RUSTC="$rustc_wrapper" && make install RUSTC="$rustc_wrapper")
 }
 
 build_v4_ruby() {
   local bootstrap_source bootstrap_prefix="$BUILD/bootstrap-prefix" target_source wrapper override
+  local bootstrap_rustc="$BUILD/rustc-bootstrap" target_rustc="$BUILD/rustc-target"
 
   # The build host may lack AVX-512, so it cannot run v4 code. Build a generic
   # Ruby from the same source. Its full install is BASERUBY (host tools that
   # need C extensions such as monitor); its miniruby, pointed at the target
   # tree, is MINIRUBY. No v4 code runs on the build host.
   bootstrap_source=$(ruby_source ruby-$RUBY_VERSION-bootstrap)
+  make_rustc_wrapper "$bootstrap_rustc" x86-64
+  make_rustc_wrapper "$target_rustc" "$RUST_CPU"
   (
     export CFLAGS='-O2 -fPIC -march=x86-64 -mtune=generic'
     export CXXFLAGS="$CFLAGS"
@@ -219,8 +236,8 @@ build_v4_ruby() {
     rm -rf "$bootstrap_prefix"
     ruby_configure_bootstrap "$bootstrap_source" "$bootstrap_prefix"
     cd "$bootstrap_source"
-    run_make
-    make install
+    run_make RUSTC="$bootstrap_rustc"
+    make install RUSTC="$bootstrap_rustc"
   )
 
   build_dependencies
@@ -245,6 +262,7 @@ EOF
     # makefiles such as enc.mk would miss the target CPPFLAGS.
     MINIRUBY="$wrapper" BASERUBY="$bootstrap_prefix/bin/ruby --disable=gems" ruby="$wrapper" RUBY="$wrapper"
     RUNRUBY="$bootstrap_prefix/bin/ruby --disable-gems -I$target_source/lib -I$target_source"
+    RUSTC="$target_rustc"
   )
   (
     cd "$target_source"
@@ -253,6 +271,31 @@ EOF
     run_make prog "${override[@]}"
     make install "${override[@]}"
   )
+}
+
+remove_build_files() {
+  # The package links to shared libraries. Static and libtool archives only
+  # increase its size, especially when they contain fat LTO objects.
+  find "$PREFIX" -type f \( -name '*.a' -o -name '*.la' \) -delete
+}
+
+remove_installed_lto_flags() {
+  local rbconfig
+  while IFS= read -r -d '' rbconfig; do
+    # Keep the ISA flags for native gems, but do not require the host compiler
+    # and linker to support the LTO setup used to build Ruby.
+    sed -i \
+      -e 's/-flto=auto -ffat-lto-objects //g' \
+      -e 's/-flto=auto //g' \
+      -e 's/ -flto=auto//g' \
+      -e 's/-ffat-lto-objects //g' \
+      -e 's/ -ffat-lto-objects//g' \
+      "$rbconfig"
+    if grep -q -- '-flto' "$rbconfig"; then
+      echo "LTO flag remains in $rbconfig" >&2
+      return 1
+    fi
+  done < <(find "$PREFIX/lib/ruby" -type f -name rbconfig.rb -print0)
 }
 
 bundle_compiler_runtime() {
@@ -354,6 +397,8 @@ else
   build_native_ruby
 fi
 
+remove_build_files
+remove_installed_lto_flags
 bundle_compiler_runtime
 make_portable_launchers
 patch_rpaths
