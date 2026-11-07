@@ -278,54 +278,8 @@ patch_rpaths() {
 
 make_portable_launchers() {
   local file first tmp
-  mv "$PREFIX/bin/ruby" "$PREFIX/bin/ruby.bin"
-
-  # Use a bundled OpenSSL config. Distro configs may be missing, or may load
-  # policies and providers that the bundled OpenSSL does not have.
-  mkdir -p "$PREFIX/ssl"
-  cat > "$PREFIX/ssl/openssl.cnf" <<'EOF'
-openssl_conf = openssl_init
-
-[openssl_init]
-providers = provider_sect
-
-[provider_sect]
-default = default_sect
-
-[default_sect]
-activate = 1
-EOF
-
-  cat > "$PREFIX/bin/ruby" <<'EOF'
-#!/bin/sh
-bindir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-root=${bindir%/bin}
-
-# Find the system CA store. Values set by the user take precedence.
-if [ -z "${SSL_CERT_FILE:-}" ]; then
-  for f in \
-    /etc/ssl/certs/ca-certificates.crt \
-    /etc/pki/tls/certs/ca-bundle.crt \
-    /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem \
-    /etc/ssl/ca-bundle.pem \
-    /etc/ssl/cert.pem; do
-    if [ -r "$f" ]; then export SSL_CERT_FILE="$f"; break; fi
-  done
-fi
-if [ -z "${SSL_CERT_DIR:-}" ]; then
-  for d in /etc/ssl/certs /etc/pki/tls/certs; do
-    if [ -d "$d" ]; then export SSL_CERT_DIR="$d"; break; fi
-  done
-fi
-
-export OPENSSL_CONF="${OPENSSL_CONF:-$root/ssl/openssl.cnf}"
-export OPENSSL_MODULES="${OPENSSL_MODULES:-$root/lib/ossl-modules}"
-exec "$bindir/ruby.bin" "$@"
-EOF
-  chmod +x "$PREFIX/bin/ruby"
 
   while IFS= read -r -d '' file; do
-    [[ "$file" == "$PREFIX/bin/ruby" || "$file" == "$PREFIX/bin/ruby.bin" ]] && continue
     first=$(head -n 1 "$file" 2>/dev/null || true)
     [[ "$first" == '#!'*ruby* ]] || continue
     tmp="$file.portable"
@@ -380,8 +334,8 @@ runtime_test() {
   cp -a "$PREFIX" "$temporary/ruby"
   "$temporary/ruby/bin/ruby" --yjit -ropenssl -rpsych -rzlib -rfiddle -e \
     'abort "YJIT disabled" unless RubyVM::YJIT.enabled?; puts [RUBY_VERSION, OpenSSL::OPENSSL_VERSION, Psych::VERSION, Zlib::VERSION].join(" | ")'
-  # Verify a real TLS handshake against the system CA store.
-  env -u SSL_CERT_FILE -u SSL_CERT_DIR -u OPENSSL_CONF "$temporary/ruby/bin/ruby" -rnet/http -e \
+  # Verify a real TLS handshake against OpenSSL's default CA store.
+  env -u SSL_CERT_FILE -u SSL_CERT_DIR "$temporary/ruby/bin/ruby" -rnet/http -e \
     'Net::HTTP.start("rubygems.org", 443, use_ssl: true, verify_mode: OpenSSL::SSL::VERIFY_PEER) { |h| puts "TLS #{h.head("/").code}" }'
   "$temporary/ruby/bin/gem" --version
   rm -rf "$temporary"

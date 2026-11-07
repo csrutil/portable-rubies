@@ -90,21 +90,26 @@ the bundled libraries wherever the directory is.
 
 ### OpenSSL and certificates
 
-`bin/ruby` is a small shell wrapper around `bin/ruby.bin`. It sets these
-variables if you have not set them already:
+The package does not set OpenSSL environment variables. OpenSSL uses
+`/etc/ssl` for its default configuration and certificate paths. If your
+system uses other paths, set the variables you need before you run Ruby:
 
-- `SSL_CERT_FILE`: the first system CA bundle that exists among
-  `/etc/ssl/certs/ca-certificates.crt` (Debian, Ubuntu, Arch),
-  `/etc/pki/tls/certs/ca-bundle.crt` (Fedora, RHEL),
-  `/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem`,
-  `/etc/ssl/ca-bundle.pem` (openSUSE), and `/etc/ssl/cert.pem`.
-- `SSL_CERT_DIR`: `/etc/ssl/certs` or `/etc/pki/tls/certs`.
-- `OPENSSL_CONF`: the bundled `ssl/openssl.cnf`, which loads the default
-  provider only. The package does not read the distribution's OpenSSL
-  config.
-- `OPENSSL_MODULES`: the bundled `lib/ossl-modules`.
+- `SSL_CERT_FILE`: path to the system CA bundle.
+- `SSL_CERT_DIR`: path to the system CA certificate directory.
+- `OPENSSL_CONF`: path to an OpenSSL configuration file.
+- `OPENSSL_MODULES`: path to the provider modules. The bundled modules are in
+  `<ruby-directory>/lib/ossl-modules`.
 
-To use other values, set the variables before you run Ruby.
+For example, on Fedora or RHEL:
+
+```sh
+export SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt
+export SSL_CERT_DIR=/etc/pki/tls/certs
+export OPENSSL_CONF=/etc/pki/tls/openssl.cnf
+export OPENSSL_MODULES=/path/to/ruby/lib/ossl-modules
+```
+
+Set only the variables that your system needs.
 
 ### Gems with native extensions
 
