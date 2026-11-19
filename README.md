@@ -15,7 +15,7 @@ CI builds the latest two stable releases listed by
 `generic`, `x86_64-v3`, and `x86_64-v4` tiers.
 
 Download packages from [Releases](../../releases). Each release tag is the
-Ruby version, for example `4.0.9`. Every tarball has a `.sha256` file.
+Ruby version, for example `4.0.10`. Every tarball has a `.sha256` file.
 
 ### Requirements
 
@@ -43,7 +43,7 @@ crashes with `Illegal instruction`.
 ## Install
 
 ```sh
-version=4.0.9
+version=4.0.10
 tier=x86_64-v3
 name="ruby-${version}-linux-${tier}"
 base="https://github.com/csrutil/portable-rubies/releases/download/${version}"
@@ -129,7 +129,7 @@ glibc version of the package.
 ```sh
 sudo apt-get install build-essential curl patchelf pkg-config rustc xz-utils
 
-scripts/build-portable-ruby x86_64-v3 4.0.9
+scripts/build-portable-ruby x86_64-v3 4.0.10
 ls dist/
 ```
 
